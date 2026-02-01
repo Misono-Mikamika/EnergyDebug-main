@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
 """
-轻量级实时能耗监控看板
+轻量级实时能耗监控看板 - 命令行版本
 实时显示高耗能进程、温度检测、能耗趋势
 """
 
 import os
 import sys
 import time
-import json
-import psutil
 from datetime import datetime
 from collections import deque
 
-# 尝试导入温度检测库
+import psutil
+
+# WMI 支持
 try:
     import wmi
     WMI_AVAILABLE = True
@@ -22,9 +22,11 @@ except ImportError:
 # NVML GPU 支持
 try:
     from pynvml import (
-        nvmlInit, nvmlDeviceGetCount, nvmlDeviceGetHandleByIndex,
-        nvmlDeviceGetName, nvmlDeviceGetTemperature, NVML_TEMPERATURE_GPU,
-        nvmlDeviceGetUtilizationRates, nvmlDeviceGetPowerUsage
+        nvmlInit, nvmlShutdown, nvmlDeviceGetCount, 
+        nvmlDeviceGetHandleByIndex, nvmlDeviceGetName,
+        nvmlDeviceGetTemperature, NVML_TEMPERATURE_GPU,
+        nvmlDeviceGetUtilizationRates, nvmlDeviceGetPowerUsage,
+        nvmlDeviceGetMemoryInfo, NVMLError
     )
     nvmlInit()
     NVML_AVAILABLE = True
@@ -41,13 +43,13 @@ HISTORY_LENGTH = 60
 
 class EnergyMonitor:
     def __init__(self):
-        self.process_history = deque(maxlen=HISTORY_LENGTH)
         self.power_history = deque(maxlen=HISTORY_LENGTH)
-        self.temp_history = deque(maxlen=HISTORY_LENGTH)
-        self.gpu_util_history = deque(maxlen=HISTORY_LENGTH)
-        self.cpu_usage = 0
-        self.wmi = None
+        self.cpu_temp_history = deque(maxlen=HISTORY_LENGTH)
+        self.gpu_temp_history = deque(maxlen=HISTORY_LENGTH)
+        self.cpu_cores = psutil.cpu_count()
+        self.cpu_logical = psutil.cpu_count(logical=True)
         self._cpu_init = False
+        self.wmi = None
         
         if WMI_AVAILABLE:
             try:
@@ -55,29 +57,57 @@ class EnergyMonitor:
             except:
                 pass
     
-    def get_cpu_usage(self):
-        """获取 CPU 使用率（需要初始化）"""
+    def get_cpu_info(self):
+        """获取完整的CPU信息"""
+        info = {'usage': 0, 'temp': None, 'freq': 0}
+        
+        # 初始化CPU使用率
         if not self._cpu_init:
-            psutil.cpu_percent(interval=None)
+            psutil.cpu_percent(interval=0.1)
             self._cpu_init = True
-            return 0
-        return psutil.cpu_percent(interval=None)
+            time.sleep(0.3)
+        
+        info['usage'] = psutil.cpu_percent(interval=0.1)
+        
+        try:
+            freq = psutil.cpu_freq()
+            if freq:
+                info['freq'] = round(freq.current, 0)
+        except:
+            pass
+        
+        # CPU温度
+        info['temp'] = self.get_cpu_temp()
+        
+        return info
     
     def get_cpu_temp(self):
-        """获取 CPU 温度"""
+        """获取CPU温度"""
         if self.wmi:
             try:
                 for tz in self.wmi.MSAcpi_ThermalZoneTemperature():
                     if hasattr(tz, 'CurrentTemperature'):
-                        return tz.CurrentTemperature / 10.0 - 273.15
+                        return round(tz.CurrentTemperature / 10.0 - 273.15, 1)
             except:
                 pass
-        # 基于负载估算
-        return 40 + self.cpu_usage * 0.5
+        
+        try:
+            temps = psutil.sensors_temperatures()
+            if temps:
+                for key in ['coretemp', 'k10temp', 'cpu-thermal']:
+                    if key in temps:
+                        return round(temps[key][0].current, 1)
+        except:
+            pass
+        
+        return None
     
     def get_gpu_info(self):
-        """获取 GPU 信息：温度、使用率、功耗、名称"""
-        info = {'temp': None, 'util': None, 'power': None, 'name': None}
+        """获取GPU信息"""
+        info = {
+            'name': None, 'temp': None, 'util': None, 
+            'power': None, 'mem_used': None, 'mem_total': None
+        }
         
         if not NVML_AVAILABLE or NVML_DEVICE_COUNT == 0:
             return info
@@ -85,30 +115,38 @@ class EnergyMonitor:
         try:
             handle = nvmlDeviceGetHandleByIndex(0)
             
-            # GPU 名称
+            # 名称
             try:
                 name = nvmlDeviceGetName(handle)
-                info['name'] = name.decode('utf-8') if isinstance(name, bytes) else name
+                info['name'] = name.decode('utf-8') if isinstance(name, bytes) else str(name)
             except:
                 info['name'] = "NVIDIA GPU"
             
-            # GPU 温度
+            # 温度
             try:
                 info['temp'] = nvmlDeviceGetTemperature(handle, NVML_TEMPERATURE_GPU)
             except:
                 pass
             
-            # GPU 使用率
+            # 使用率
             try:
                 util = nvmlDeviceGetUtilizationRates(handle)
                 info['util'] = util.gpu
             except:
                 pass
             
-            # GPU 功耗 (毫瓦转瓦)
+            # 功耗
             try:
                 power_mw = nvmlDeviceGetPowerUsage(handle)
                 info['power'] = round(power_mw / 1000.0, 1)
+            except:
+                pass
+            
+            # 显存
+            try:
+                mem = nvmlDeviceGetMemoryInfo(handle)
+                info['mem_used'] = round(mem.used / 1024**3, 1)
+                info['mem_total'] = round(mem.total / 1024**3, 1)
             except:
                 pass
                 
@@ -117,56 +155,56 @@ class EnergyMonitor:
         
         return info
     
-    def get_battery_temp(self):
-        """获取电池温度"""
-        if self.wmi:
-            try:
-                for bat in self.wmi.Win32_Battery():
-                    if hasattr(bat, 'Temperature') and bat.Temperature:
-                        return float(bat.Temperature)
-            except:
-                pass
-        return None
-    
     def get_battery_info(self):
         """获取电池信息"""
         battery = psutil.sensors_battery()
-        if battery:
-            hours_left = "N/A"
-            if not battery.power_plugged and battery.secsleft > 0:
-                hours = battery.secsleft // 3600
-                mins = (battery.secsleft % 3600) // 60
-                hours_left = f"{hours}h {mins}m"
-            
-            return {
-                'percent': battery.percent,
-                'plugged': battery.power_plugged,
-                'time_left': hours_left
-            }
-        return None
+        if not battery:
+            return None
+        
+        info = {
+            'percent': battery.percent,
+            'plugged': battery.power_plugged,
+            'time_left': "N/A"
+        }
+        
+        if battery.power_plugged:
+            info['time_left'] = "Charging" if battery.percent < 99 else "Fully Charged"
+        elif battery.secsleft > 0:
+            hours = battery.secsleft // 3600
+            mins = (battery.secsleft % 3600) // 60
+            info['time_left'] = f"{hours}h {mins}m"
+        
+        return info
     
     def get_process_energy(self):
-        """获取进程能耗信息"""
+        """获取进程能耗"""
         processes = []
         total_power = 0
         
-        for proc in psutil.process_iter(['pid', 'name', 'cpu_percent', 'memory_percent']):
+        for proc in psutil.process_iter(['pid', 'name', 'cpu_percent', 'memory_percent', 'status']):
             try:
                 info = proc.info
-                cpu = info['cpu_percent'] or 0
-                mem = info['memory_percent'] or 0
+                name = info['name'] or "Unknown"
                 
-                # 估算功耗
-                power_w = 5.0 + (cpu * 0.3) + (mem * 0.05)
+                # 过滤系统进程
+                if name in ['System Idle Process', 'Registry']:
+                    continue
+                
+                cpu = info['cpu_percent'] or 0
+                if cpu > 100:
+                    cpu = min(cpu, 100)
+                
+                mem = info['memory_percent'] or 0
+                power_w = 2.0 + (cpu * 0.5) + (mem * 0.1)
                 total_power += power_w
                 
                 processes.append({
-                    'pid': info['pid'],
-                    'name': info['name'][:25],
+                    'name': name[:28],
                     'cpu': cpu,
                     'mem': mem,
                     'power_w': power_w,
-                    'power_mw': power_w * 1000
+                    'percent': 0,
+                    'status': info['status'] or 'running'
                 })
             except:
                 continue
@@ -176,121 +214,87 @@ class EnergyMonitor:
         for p in processes:
             p['percent'] = (p['power_w'] / total_power * 100) if total_power > 0 else 0
         
-        return processes, total_power
+        return processes[:10], total_power
     
     def clear_screen(self):
-        """清屏"""
         os.system('cls' if os.name == 'nt' else 'clear')
     
-    def format_bar(self, value, max_val=100, width=20):
-        """格式化进度条"""
-        filled = int(value / max_val * width)
-        return '█' * filled + '░' * (width - filled)
-    
     def display_dashboard(self):
-        """显示实时看板"""
         self.clear_screen()
         
         # 获取数据
-        self.cpu_usage = self.get_cpu_usage()
-        mem_usage = psutil.virtual_memory().percent
-        temps = {
-            'cpu': self.get_cpu_temp(),
-            'gpu': None,
-            'battery': self.get_battery_temp()
-        }
+        cpu_info = self.get_cpu_info()
         gpu_info = self.get_gpu_info()
-        if gpu_info['temp']:
-            temps['gpu'] = gpu_info['temp']
-        
         battery = self.get_battery_info()
         processes, total_power = self.get_process_energy()
+        mem = psutil.virtual_memory()
         
         # 保存历史
         self.power_history.append(total_power)
-        self.temp_history.append(temps['cpu'])
-        if gpu_info['util']:
-            self.gpu_util_history.append(gpu_info['util'])
+        if cpu_info['temp']:
+            self.cpu_temp_history.append(cpu_info['temp'])
+        if gpu_info['temp']:
+            self.gpu_temp_history.append(gpu_info['temp'])
         
         # 打印看板
         print("╔" + "═" * 78 + "╗")
-        print(f"║{'ENERGY MONITOR - Real-time Dashboard':^78}║")
+        print(f"║{'⚡ ENERGY MONITOR - Real-time Dashboard':^78}║")
         print(f"║{datetime.now().strftime('%Y-%m-%d %H:%M:%S'):^78}║")
         print("╠" + "═" * 78 + "╣")
         
-        # 温度区域
-        print("║ [HARDWARE TEMPERATURE]                                                     ║")
-        cpu_str = f"{temps['cpu']:.1f}°C" if temps['cpu'] else "N/A"
-        gpu_str = f"{temps['gpu']:.1f}°C" if temps['gpu'] else "N/A"
-        batt_str = f"{temps['battery']:.1f}°C" if temps['battery'] else "N/A"
-        
-        cpu_bar = self.format_bar(min(temps['cpu'] or 0, 100), 100, 12)
-        gpu_bar = self.format_bar(min(temps['gpu'] or 0, 100), 100, 12) if temps['gpu'] else "N/A"
-        print(f"║ CPU: {cpu_str:>6} {cpu_bar}  GPU: {gpu_str:>6} {gpu_bar}  Battery: {batt_str:>6}    ║")
+        # CPU 信息
+        cpu_temp_str = f"{cpu_info['temp']:.1f}°C" if cpu_info['temp'] else "N/A"
+        print(f"║ [CPU] {self.cpu_cores} Cores / {self.cpu_logical} Threads                                        ║")
+        print(f"║   Temperature: {cpu_temp_str:>8}  Usage: {cpu_info['usage']:>5.1f}%  Frequency: {cpu_info['freq']:>4.0f} MHz      ║")
         
         # GPU 信息
         if gpu_info['name']:
             print("╠" + "═" * 78 + "╣")
-            print(f"║ [GPU: {gpu_info['name'][:25]:<25}]                                    ║")
-            util_str = f"{gpu_info['util']:.1f}%" if gpu_info['util'] else "N/A"
-            power_str = f"{gpu_info['power']:.1f}W" if gpu_info['power'] else "N/A"
-            print(f"║   Utilization: {util_str:>6}    Power: {power_str:>6}    Temp: {gpu_str:>6}              ║")
+            gpu_name = gpu_info['name'][:50]
+            gpu_temp = f"{gpu_info['temp']}°C" if gpu_info['temp'] else "N/A"
+            gpu_util = f"{gpu_info['util']}%" if gpu_info['util'] is not None else "N/A"
+            gpu_power = f"{gpu_info['power']}W" if gpu_info['power'] else "N/A"
+            gpu_mem = f"{gpu_info['mem_used']}/{gpu_info['mem_total']}GB" if gpu_info['mem_used'] else "N/A"
+            print(f"║ [GPU] {gpu_name:<56} ║")
+            print(f"║   Temp: {gpu_temp:>8}  Util: {gpu_util:>6}  Power: {gpu_power:>6}  VRAM: {gpu_mem:<12} ║")
         
         # 系统功耗
         print("╠" + "═" * 78 + "╣")
-        print("║ [SYSTEM POWER]                                                             ║")
-        cpu_bar = self.format_bar(self.cpu_usage, 100, 12)
-        mem_bar = self.format_bar(mem_usage, 100, 12)
-        print(f"║ Total: {total_power:>6.1f}W   CPU: {self.cpu_usage:>5.1f}% {cpu_bar}   Mem: {mem_usage:>5.1f}% {mem_bar}  ║")
+        print(f"║ [SYSTEM]  Total Power: {total_power:>7.1f}W  Memory: {mem.percent:>5.1f}% ({mem.used//1024**3}GB used)     ║")
         
-        # 电池状态
+        # 电池
         if battery:
-            print("╠" + "═" * 78 + "╣")
-            print("║ [BATTERY]                                                                  ║")
-            batt_bar = self.format_bar(battery['percent'], 100, 20)
-            status = "⚡ CHARGING " if battery['plugged'] else "🔋 DISCHARGING"
-            print(f"║ {batt_bar} {battery['percent']:>5.1f}%  {status:<15}  {battery['time_left']:<12}        ║")
+            status = "⚡ Charging" if battery['plugged'] else "🔋 Battery"
+            print(f"║ [BATTERY] {battery['percent']:>5.1f}%  {status:<15}  {battery['time_left']:<20}      ║")
         
-        # 高耗能进程
+        # 进程列表
         print("╠" + "═" * 78 + "╣")
-        print("║ [TOP ENERGY CONSUMING PROCESSES]                                           ║")
-        print("║ Rank │ Process Name              │  Power   │    %    │ CPU%  │ Mem%       ║")
-        print("║──────┼───────────────────────────┼──────────┼─────────┼───────┼────────────║")
+        print("║ Top Energy Consuming Processes:                                            ║")
+        print("║ Rank │ Process                    │ Power   │ Share │  CPU  │ Memory      ║")
+        print("║──────┼────────────────────────────┼─────────┼───────┼───────┼─────────────║")
         
         for i, p in enumerate(processes[:8], 1):
-            name = p['name'][:25]
-            print(f"║ {i:>4} │ {name:<25} │ {p['power_w']:>6.1f}W  │ {p['percent']:>5.1f}% │ {p['cpu']:>5.1f} │ {p['mem']:>6.1f}     ║")
+            status_icon = "●" if p['status'] == 'running' else "○"
+            print(f"║ {i:>4} │ {p['name']:<26} │ {p['power_w']:>6.2f}W │ {p['percent']:>5.1f}%│ {p['cpu']:>5.1f}%│ {p['mem']:>6.1f}% {status_icon}    ║")
         
         print("╚" + "═" * 78 + "╝")
         
         # 趋势图
-        print("\n[POWER TREND - Last 60 seconds]")
-        if len(self.power_history) > 1:
-            recent = list(self.power_history)[-30:]
-            max_p = max(recent) if recent else 1
-            min_p = min(recent) if recent else 0
-            if max_p == min_p:
-                max_p = min_p + 1
-            
-            for p in recent[-10:]:
-                height = int((p - min_p) / (max_p - min_p) * 15)
-                bar = '█' * height + '░' * (15 - height)
-                print(f" {bar} {p:>6.1f}W")
+        print("\n[CPU Temperature Trend - Last 30 seconds]")
+        if len(self.cpu_temp_history) > 1:
+            recent = list(self.cpu_temp_history)[-30:]
+            for temp in recent[-10:]:
+                bar = "█" * int((temp - 30) / 70 * 20) if temp > 30 else ""
+                print(f"  {bar:<20} {temp:.1f}°C")
         
-        # GPU 使用率趋势
-        if len(self.gpu_util_history) > 1:
-            print("\n[GPU UTILIZATION TREND]")
-            recent = list(self.gpu_util_history)[-10:]
-            for u in recent:
-                height = int(u / 100 * 15)
-                bar = '█' * height + '░' * (15 - height)
-                print(f" {bar} {u:>5.1f}%")
+        if gpu_info['temp']:
+            print("\n[GPU Temperature]")
+            print(f"  Current: {gpu_info['temp']}°C")
     
     def run(self):
-        """运行监控循环"""
         print("Starting Energy Monitor...")
-        print("Initializing CPU monitor (please wait)...")
-        self.get_cpu_usage()  # 初始化
+        print("Initializing (please wait)...")
+        self.get_cpu_info()  # 初始化
         time.sleep(1)
         print("Press Ctrl+C to stop\n")
         
