@@ -22,35 +22,48 @@ try:
 except ImportError:
     WMI_AVAILABLE = False
 
+# NVML 初始化
 try:
-    from pynvml import nvmlInit, nvmlDeviceGetCount, nvmlDeviceGetHandleByIndex
-    from pynvml import nvmlDeviceGetTemperature, NVML_TEMPERATURE_GPU
+    from pynvml import (
+        nvmlInit, nvmlShutdown, nvmlDeviceGetCount, 
+        nvmlDeviceGetHandleByIndex, nvmlDeviceGetName,
+        nvmlDeviceGetTemperature, NVML_TEMPERATURE_GPU,
+        nvmlDeviceGetUtilizationRates, nvmlDeviceGetPowerUsage
+    )
     nvmlInit()
     NVML_AVAILABLE = True
     NVML_DEVICE_COUNT = nvmlDeviceGetCount()
-except:
+    print(f"NVML initialized: {NVML_DEVICE_COUNT} GPU(s) detected")
+except Exception as e:
+    print(f"NVML not available: {e}")
     NVML_AVAILABLE = False
     NVML_DEVICE_COUNT = 0
 
 app = Flask(__name__, template_folder='.', static_folder='.')
 CORS(app)
 
-# 全局数据缓存
 class MonitorData:
     def __init__(self):
         self.processes = []
         self.temps = {'cpu': 0, 'gpu': None, 'battery': None}
+        self.gpu_info = {'temp': None, 'util': None, 'power': None, 'name': None}
         self.battery = None
         self.total_power = 0
         self.power_history = deque(maxlen=60)
         self.temp_history = deque(maxlen=60)
+        self.gpu_util_history = deque(maxlen=60)
+        self.cpu_usage = 0
+        self.mem_usage = 0
         self.wmi = None
+        
         if WMI_AVAILABLE:
             try:
                 self.wmi = wmi.WMI()
             except:
                 pass
+        
         self.lock = threading.Lock()
+        self._cpu_percent_init = False
     
     def get_cpu_temp(self):
         if self.wmi:
@@ -60,17 +73,44 @@ class MonitorData:
                         return tz.CurrentTemperature / 10.0 - 273.15
             except:
                 pass
-        cpu_load = psutil.cpu_percent()
-        return 40 + cpu_load * 0.5
+        return 40 + self.cpu_usage * 0.5
     
-    def get_gpu_temp(self):
-        if NVML_AVAILABLE and NVML_DEVICE_COUNT > 0:
+    def get_gpu_info(self):
+        info = {'temp': None, 'util': None, 'power': None, 'name': None}
+        
+        if not NVML_AVAILABLE or NVML_DEVICE_COUNT == 0:
+            return info
+        
+        try:
+            handle = nvmlDeviceGetHandleByIndex(0)
+            
             try:
-                handle = nvmlDeviceGetHandleByIndex(0)
-                return nvmlDeviceGetTemperature(handle, NVML_TEMPERATURE_GPU)
+                name = nvmlDeviceGetName(handle)
+                info['name'] = name.decode('utf-8') if isinstance(name, bytes) else name
+            except:
+                info['name'] = "NVIDIA GPU"
+            
+            try:
+                info['temp'] = nvmlDeviceGetTemperature(handle, NVML_TEMPERATURE_GPU)
             except:
                 pass
-        return None
+            
+            try:
+                util = nvmlDeviceGetUtilizationRates(handle)
+                info['util'] = util.gpu
+            except:
+                pass
+            
+            try:
+                power_mw = nvmlDeviceGetPowerUsage(handle)
+                info['power'] = round(power_mw / 1000.0, 1)
+            except:
+                pass
+                
+        except Exception as e:
+            print(f"GPU info error: {e}")
+        
+        return info
     
     def get_battery_temp(self):
         if self.wmi:
@@ -130,23 +170,39 @@ class MonitorData:
     def update(self):
         while True:
             try:
+                if not self._cpu_percent_init:
+                    psutil.cpu_percent(interval=None)
+                    self._cpu_percent_init = True
+                    time.sleep(0.5)
+                
+                self.cpu_usage = psutil.cpu_percent(interval=None)
+                self.mem_usage = psutil.virtual_memory().percent
+                
                 processes, total_power = self.get_process_energy()
-                temps = {
-                    'cpu': round(self.get_cpu_temp(), 1),
-                    'gpu': self.get_gpu_temp(),
-                    'battery': self.get_battery_temp()
-                }
+                cpu_temp = self.get_cpu_temp()
+                gpu_info = self.get_gpu_info()
                 battery = self.get_battery_info()
+                battery_temp = self.get_battery_temp()
+                
+                temps = {
+                    'cpu': round(cpu_temp, 1),
+                    'gpu': gpu_info['temp'],
+                    'battery': battery_temp
+                }
                 
                 with self.lock:
                     self.processes = processes
                     self.temps = temps
+                    self.gpu_info = gpu_info
                     self.battery = battery
                     self.total_power = round(total_power, 1)
                     self.power_history.append(total_power)
-                    self.temp_history.append(temps['cpu'])
+                    self.temp_history.append(cpu_temp)
+                    if gpu_info['util'] is not None:
+                        self.gpu_util_history.append(gpu_info['util'])
                 
                 time.sleep(1)
+                
             except Exception as e:
                 print(f"Update error: {e}")
                 time.sleep(1)
@@ -154,13 +210,15 @@ class MonitorData:
     def get_data(self):
         with self.lock:
             return {
-                'processes': self.processes,
-                'temps': self.temps,
+                'processes': list(self.processes),
+                'temps': dict(self.temps),
+                'gpu_info': dict(self.gpu_info),
                 'battery': self.battery,
                 'total_power': self.total_power,
                 'power_history': list(self.power_history),
-                'cpu_usage': psutil.cpu_percent(),
-                'mem_usage': psutil.virtual_memory().percent,
+                'gpu_util_history': list(self.gpu_util_history),
+                'cpu_usage': self.cpu_usage,
+                'mem_usage': self.mem_usage,
                 'timestamp': datetime.now().strftime('%H:%M:%S')
             }
 
@@ -175,7 +233,6 @@ def get_data():
     return jsonify(monitor.get_data())
 
 if __name__ == '__main__':
-    # 启动后台更新线程
     update_thread = threading.Thread(target=monitor.update, daemon=True)
     update_thread.start()
     
