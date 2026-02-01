@@ -1,0 +1,54 @@
+{
+  "time": "2026-02-01T16:28:00.594068",
+  "workload": "redis-server",
+  "summary": {
+    "total_runs": 210,
+    "images": [
+      "alpineglibc",
+      "alpinejem",
+      "alpinemusl6",
+      "alpinemusl",
+      "alpinepack",
+      "ubuntu",
+      "ubuntupack"
+    ]
+  },
+  "stats": {
+    "mean": {
+      "alpineglibc": 15716.435249328613,
+      "alpinejem": 15839.147885130842,
+      "alpinemusl": 17782.933218895396,
+      "alpinemusl6": 17762.24931182563,
+      "alpinepack": 16114.482084656755,
+      "ubuntu": 15945.961473591875,
+      "ubuntupack": 15581.729762776693
+    },
+    "min": {
+      "alpineglibc": 15499.466186523438,
+      "alpinejem": 15733.494064331055,
+      "alpinemusl": 17506.316070586443,
+      "alpinemusl6": 17499.136108398438,
+      "alpinepack": 16009.622756958008,
+      "ubuntu": 15691.4387206994,
+      "ubuntupack": 15470.543655395508
+    },
+    "max": {
+      "alpineglibc": 18696.417388916016,
+      "alpinejem": 15962.915939360857,
+      "alpinemusl": 17969.496856689453,
+      "alpinemusl6": 18000.733520537615,
+      "alpinepack": 16344.366760253906,
+      "ubuntu": 17490.835220336914,
+      "ubuntupack": 15679.980010986328
+    },
+    "count": {
+      "alpineglibc": 30,
+      "alpinejem": 30,
+      "alpinemusl": 30,
+      "alpinemusl6": 30,
+      "alpinepack": 30,
+      "ubuntu": 30,
+      "ubuntupack": 30
+    }
+  }
+}

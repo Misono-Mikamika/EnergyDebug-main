@@ -1,0 +1,36 @@
+{
+  "timestamp": "2026-02-01T19:11:15.584174",
+  "workload": "redis-server",
+  "total_images": 7,
+  "total_runs": 210,
+  "anomalies": [],
+  "efficiency_classification": {
+    "high_efficiency": [
+      "alpineglibc",
+      "ubuntu",
+      "ubuntupack"
+    ],
+    "medium_efficiency": [
+      "alpinejem",
+      "alpinepack"
+    ],
+    "low_efficiency": [
+      "alpinemusl",
+      "alpinemusl6"
+    ]
+  },
+  "system_info": {
+    "cpu_count": 16,
+    "cpu_freq_mhz": 2500.0,
+    "total_memory_gb": 15.730949401855469,
+    "platform": "win32"
+  },
+  "energy_summary": {
+    "total_images": 7,
+    "total_runs": 210,
+    "avg_energy_j": 16391.84842660083,
+    "min_energy_j": 15470.543655395508,
+    "max_energy_j": 18696.417388916016,
+    "std_energy_j": 923.4392745760816
+  }
+}
