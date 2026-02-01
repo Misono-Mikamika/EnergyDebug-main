@@ -1,0 +1,559 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Energy Monitor - Real-time Dashboard</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
+            color: #fff;
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        
+        .header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+        }
+        
+        .timestamp {
+            opacity: 0.8;
+            font-size: 1.1em;
+        }
+        
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+            max-width: 1600px;
+            margin: 0 auto;
+        }
+        
+        .card {
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            border-radius: 15px;
+            padding: 20px;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+        }
+        
+        .card-title {
+            font-size: 1.3em;
+            margin-bottom: 15px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .icon {
+            font-size: 1.5em;
+        }
+        
+        .temp-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 15px;
+        }
+        
+        .temp-item {
+            text-align: center;
+            padding: 15px;
+            background: rgba(0, 0, 0, 0.2);
+            border-radius: 10px;
+        }
+        
+        .temp-value {
+            font-size: 2em;
+            font-weight: bold;
+            margin: 10px 0;
+        }
+        
+        .temp-label {
+            opacity: 0.8;
+            font-size: 0.9em;
+        }
+        
+        .power-display {
+            text-align: center;
+            padding: 20px;
+        }
+        
+        .power-value {
+            font-size: 3.5em;
+            font-weight: bold;
+            color: #ffd700;
+            text-shadow: 0 0 20px rgba(255, 215, 0, 0.5);
+        }
+        
+        .power-unit {
+            font-size: 1.5em;
+            opacity: 0.8;
+        }
+        
+        .stats-row {
+            display: flex;
+            justify-content: space-around;
+            margin-top: 15px;
+            padding-top: 15px;
+            border-top: 1px solid rgba(255, 255, 255, 0.2);
+        }
+        
+        .stat-item {
+            text-align: center;
+        }
+        
+        .stat-value {
+            font-size: 1.8em;
+            font-weight: bold;
+        }
+        
+        .stat-label {
+            font-size: 0.85em;
+            opacity: 0.7;
+        }
+        
+        .battery-status {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 20px;
+            padding: 15px;
+        }
+        
+        .battery-icon {
+            font-size: 3em;
+        }
+        
+        .battery-info {
+            text-align: left;
+        }
+        
+        .battery-percent {
+            font-size: 2em;
+            font-weight: bold;
+        }
+        
+        .battery-detail {
+            opacity: 0.8;
+        }
+        
+        .progress-bar {
+            width: 100%;
+            height: 20px;
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 10px;
+            overflow: hidden;
+            margin-top: 10px;
+        }
+        
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #4CAF50, #8BC34A);
+            transition: width 0.5s ease;
+        }
+        
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.95em;
+        }
+        
+        th, td {
+            padding: 12px 8px;
+            text-align: left;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        
+        th {
+            background: rgba(0, 0, 0, 0.2);
+            font-weight: 600;
+            text-transform: uppercase;
+            font-size: 0.85em;
+            letter-spacing: 0.5px;
+        }
+        
+        tr:hover {
+            background: rgba(255, 255, 255, 0.05);
+        }
+        
+        .process-name {
+            max-width: 200px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        
+        .power-badge {
+            background: rgba(255, 215, 0, 0.3);
+            padding: 4px 10px;
+            border-radius: 12px;
+            font-weight: bold;
+            color: #ffd700;
+        }
+        
+        .percent-badge {
+            background: rgba(255, 255, 255, 0.2);
+            padding: 4px 10px;
+            border-radius: 12px;
+        }
+        
+        .chart-container {
+            position: relative;
+            height: 250px;
+            margin-top: 10px;
+        }
+        
+        .status-connected {
+            color: #4CAF50;
+        }
+        
+        .status-disconnected {
+            color: #f44336;
+        }
+        
+        .connection-status {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            background: rgba(0, 0, 0, 0.5);
+            padding: 8px 15px;
+            border-radius: 20px;
+            font-size: 0.9em;
+        }
+        
+        .dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #4CAF50;
+            animation: pulse 2s infinite;
+        }
+        
+        @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.5; }
+            100% { opacity: 1; }
+        }
+    </style>
+</head>
+<body>
+    <div class="connection-status">
+        <div class="dot" id="statusDot"></div>
+        <span id="statusText">Connected</span>
+    </div>
+    
+    <div class="header">
+        <h1>⚡ Energy Monitor</h1>
+        <div class="timestamp" id="timestamp">--:--:--</div>
+    </div>
+    
+    <div class="grid">
+        <!-- Temperature Card -->
+        <div class="card">
+            <div class="card-title">
+                <span class="icon">🌡️</span>
+                <span>Hardware Temperature</span>
+            </div>
+            <div class="temp-grid">
+                <div class="temp-item">
+                    <div class="temp-label">CPU</div>
+                    <div class="temp-value" id="cpuTemp">--°C</div>
+                </div>
+                <div class="temp-item">
+                    <div class="temp-label">GPU</div>
+                    <div class="temp-value" id="gpuTemp">--°C</div>
+                </div>
+                <div class="temp-item">
+                    <div class="temp-label">Battery</div>
+                    <div class="temp-value" id="battTemp">--°C</div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Power Card -->
+        <div class="card">
+            <div class="card-title">
+                <span class="icon">⚡</span>
+                <span>System Power</span>
+            </div>
+            <div class="power-display">
+                <div class="power-value" id="totalPower">--</div>
+                <div class="power-unit">Watts</div>
+            </div>
+            <div class="stats-row">
+                <div class="stat-item">
+                    <div class="stat-value" id="cpuUsage">--%</div>
+                    <div class="stat-label">CPU Usage</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-value" id="memUsage">--%</div>
+                    <div class="stat-label">Memory</div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Battery Card -->
+        <div class="card">
+            <div class="card-title">
+                <span class="icon">🔋</span>
+                <span>Battery Status</span>
+            </div>
+            <div class="battery-status">
+                <div class="battery-icon" id="batteryIcon">🔋</div>
+                <div class="battery-info">
+                    <div class="battery-percent" id="batteryPercent">--%</div>
+                    <div class="battery-detail" id="batteryStatus">Unknown</div>
+                    <div class="battery-detail" id="batteryTime">--</div>
+                </div>
+            </div>
+            <div class="progress-bar">
+                <div class="progress-fill" id="batteryBar" style="width: 0%"></div>
+            </div>
+        </div>
+        
+        <!-- Process Table -->
+        <div class="card" style="grid-column: span 2;">
+            <div class="card-title">
+                <span class="icon">🔥</span>
+                <span>Top Energy Consuming Processes</span>
+            </div>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Rank</th>
+                        <th>Process Name</th>
+                        <th>Power (W)</th>
+                        <th>Share (%)</th>
+                        <th>CPU (%)</th>
+                        <th>Memory (%)</th>
+                    </tr>
+                </thead>
+                <tbody id="processTable">
+                    <tr><td colspan="6" style="text-align:center">Loading...</td></tr>
+                </tbody>
+            </table>
+        </div>
+        
+        <!-- Power Trend Chart -->
+        <div class="card">
+            <div class="card-title">
+                <span class="icon">📊</span>
+                <span>Power Trend (60s)</span>
+            </div>
+            <div class="chart-container">
+                <canvas id="powerChart"></canvas>
+            </div>
+        </div>
+        
+        <!-- Temperature Trend Chart -->
+        <div class="card">
+            <div class="card-title">
+                <span class="icon">🌡️</span>
+                <span>CPU Temperature Trend (60s)</span>
+            </div>
+            <div class="chart-container">
+                <canvas id="tempChart"></canvas>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        // Chart configuration
+        const chartOptions = {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: {
+                    labels: { color: '#fff' }
+                }
+            },
+            scales: {
+                x: {
+                    ticks: { color: 'rgba(255,255,255,0.7)' },
+                    grid: { color: 'rgba(255,255,255,0.1)' }
+                },
+                y: {
+                    ticks: { color: 'rgba(255,255,255,0.7)' },
+                    grid: { color: 'rgba(255,255,255,0.1)' }
+                }
+            }
+        };
+        
+        // Initialize Power Chart
+        const powerCtx = document.getElementById('powerChart').getContext('2d');
+        const powerChart = new Chart(powerCtx, {
+            type: 'line',
+            data: {
+                labels: [],
+                datasets: [{
+                    label: 'Power (W)',
+                    data: [],
+                    borderColor: '#ffd700',
+                    backgroundColor: 'rgba(255, 215, 0, 0.1)',
+                    borderWidth: 2,
+                    fill: true,
+                    tension: 0.4
+                }]
+            },
+            options: {
+                ...chartOptions,
+                scales: {
+                    ...chartOptions.scales,
+                    y: {
+                        ...chartOptions.scales.y,
+                        beginAtZero: true
+                    }
+                }
+            }
+        });
+        
+        // Initialize Temperature Chart
+        const tempCtx = document.getElementById('tempChart').getContext('2d');
+        const tempChart = new Chart(tempCtx, {
+            type: 'line',
+            data: {
+                labels: [],
+                datasets: [{
+                    label: 'CPU Temp (°C)',
+                    data: [],
+                    borderColor: '#ff6b6b',
+                    backgroundColor: 'rgba(255, 107, 107, 0.1)',
+                    borderWidth: 2,
+                    fill: true,
+                    tension: 0.4
+                }]
+            },
+            options: {
+                ...chartOptions,
+                scales: {
+                    ...chartOptions.scales,
+                    y: {
+                        ...chartOptions.scales.y,
+                        beginAtZero: false,
+                        min: 30
+                    }
+                }
+            }
+        });
+        
+        let updateInterval;
+        
+        async function fetchData() {
+            try {
+                const response = await fetch('/api/data');
+                const data = await response.json();
+                updateDashboard(data);
+                updateStatus(true);
+            } catch (error) {
+                console.error('Failed to fetch data:', error);
+                updateStatus(false);
+            }
+        }
+        
+        function updateDashboard(data) {
+            // Update timestamp
+            document.getElementById('timestamp').textContent = data.timestamp;
+            
+            // Update temperatures
+            document.getElementById('cpuTemp').textContent = 
+                data.temps.cpu ? `${data.temps.cpu}°C` : 'N/A';
+            document.getElementById('gpuTemp').textContent = 
+                data.temps.gpu ? `${data.temps.gpu}°C` : 'N/A';
+            document.getElementById('battTemp').textContent = 
+                data.temps.battery ? `${data.temps.battery}°C` : 'N/A';
+            
+            // Update power
+            document.getElementById('totalPower').textContent = data.total_power || '--';
+            document.getElementById('cpuUsage').textContent = `${data.cpu_usage || 0}%`;
+            document.getElementById('memUsage').textContent = `${data.mem_usage || 0}%`;
+            
+            // Update battery
+            if (data.battery) {
+                document.getElementById('batteryPercent').textContent = `${data.battery.percent}%`;
+                document.getElementById('batteryStatus').textContent = 
+                    data.battery.plugged ? '⚡ Charging' : '🔋 Discharging';
+                document.getElementById('batteryTime').textContent = 
+                    `Time left: ${data.battery.time_left}`;
+                document.getElementById('batteryBar').style.width = `${data.battery.percent}%`;
+                document.getElementById('batteryIcon').textContent = 
+                    data.battery.plugged ? '🔌' : '🔋';
+            }
+            
+            // Update process table
+            const tableBody = document.getElementById('processTable');
+            if (data.processes && data.processes.length > 0) {
+                tableBody.innerHTML = data.processes.map((p, i) => `
+                    <tr>
+                        <td>${i + 1}</td>
+                        <td class="process-name" title="${p.name}">${p.name}</td>
+                        <td><span class="power-badge">${p.power_w} W</span></td>
+                        <td><span class="percent-badge">${p.percent}%</span></td>
+                        <td>${p.cpu}%</td>
+                        <td>${p.mem}%</td>
+                    </tr>
+                `).join('');
+            }
+            
+            // Update charts
+            updateCharts(data);
+        }
+        
+        function updateCharts(data) {
+            // Update power chart
+            if (data.power_history && data.power_history.length > 0) {
+                const labels = data.power_history.map((_, i) => i);
+                powerChart.data.labels = labels;
+                powerChart.data.datasets[0].data = data.power_history;
+                powerChart.update('none'); // Update without animation for smoother performance
+            }
+        }
+        
+        function updateStatus(connected) {
+            const dot = document.getElementById('statusDot');
+            const text = document.getElementById('statusText');
+            
+            if (connected) {
+                dot.style.background = '#4CAF50';
+                dot.style.animation = 'pulse 2s infinite';
+                text.textContent = 'Connected';
+                text.className = 'status-connected';
+            } else {
+                dot.style.background = '#f44336';
+                dot.style.animation = 'none';
+                text.textContent = 'Disconnected';
+                text.className = 'status-disconnected';
+            }
+        }
+        
+        // Start updating
+        fetchData(); // Initial fetch
+        updateInterval = setInterval(fetchData, 1000); // Update every second
+        
+        // Cleanup on page unload
+        window.addEventListener('beforeunload', () => {
+            if (updateInterval) {
+                clearInterval(updateInterval);
+            }
+        });
+    </script>
+</body>
+</html>
